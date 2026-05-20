@@ -1,5 +1,6 @@
 {
   "public": true,
-  "buildCommand": "echo 'Static deployment'",
-  "outputDirectory": "."
+  "rewrites": [
+    { "source": "/", "destination": "/game.html" }
+  ]
 }
