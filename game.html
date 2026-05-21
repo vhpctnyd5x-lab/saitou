@@ -423,7 +423,8 @@
             timeSlow: 0,
             bossActive: false,
             bossDefeated: 0,
-            kills: 0
+            kills: 0,
+            playTime: 0
         };
 
         const player = {
@@ -455,6 +456,7 @@
         const powerups = [];
         const shockwaves = [];
         const debris = [];
+        const capitalShips = [];
         let boss = null;
 
         // ===== Initialization =====
@@ -1496,6 +1498,9 @@
                 return;
             }
 
+            // Play time tracking (frames; 60fps target)
+            gameState.playTime++;
+
             // Screen shake decay
             gameState.screenShake *= 0.85;
 
@@ -1557,10 +1562,14 @@
                     fireWeapon();
                     player.fireCounter = 0;
                 }
-                // Begin charging after hold
-                if (player.fireCounter > player.fireRate * 1.5) {
+                // Begin charging after holding SPACE continuously (independent of fireCounter)
+                player.holdTimer = (player.holdTimer || 0) + 1;
+                if (player.holdTimer > 90) {
                     player.charging = true;
+                    player.holdTimer = 0;
                 }
+            } else if (!keys[' ']) {
+                player.holdTimer = 0;
             }
             if (player.charging && keys[' ']) {
                 player.charge = Math.min(100, player.charge + 1.5);
@@ -1873,8 +1882,9 @@
                 damagePlayer(40);
             }
 
-            // Boss defeated
-            if (b.health <= 0) {
+            // Boss defeated (one-shot guard prevents per-frame re-entry during death anim)
+            if (b.health <= 0 && !b.dying) {
+                b.dying = true;
                 for (let i = 0; i < 6; i++) {
                     setTimeout(() => {
                         if (boss) {
@@ -2032,6 +2042,8 @@
             gameState.bossActive = false;
             gameState.bossDefeated = 0;
             gameState.kills = 0;
+            gameState.playTime = 0;
+            capitalShips.length = 0;
             player.health = player.maxHealth;
             player.x = 100;
             player.y = canvas.height / 2;
@@ -2071,6 +2083,345 @@
                     star.y = Math.random() * canvas.height;
                 }
             });
+
+            // Capital ships drift & cleanup
+            for (let i = capitalShips.length - 1; i >= 0; i--) {
+                const s = capitalShips[i];
+                s.x -= s.speed;
+                s.bobPhase += 0.005;
+                if (s.x + s.width < -100) {
+                    capitalShips.splice(i, 1);
+                }
+            }
+            updateCapitalShipSpawn();
+        }
+
+        // ===== Capital Ships (Star Wars background) =====
+        // Thresholds reflect canonical lore: smaller/friendlier ships appear first,
+        // ultimate weapons require much higher score & survival.
+        // playTime is in frames @ ~60fps; thresholds use seconds*60.
+        const SHIP_DEFS = [
+            { // YT-1300 Millennium Falcon — 34.75m freighter, fastest hunk of junk
+                key: 'falcon',
+                timeReq: 30 * 60,      // 30s
+                scoreReq: 5000,
+                cooldown: 18 * 60,     // re-spawn every 18s when eligible
+                width: 80, height: 38,
+                speed: 0.85,
+                color: '#c4c8cc'
+            },
+            { // Lucrehulk-class Droid Control Ship — 3,170m CIS flagship
+                key: 'lucrehulk',
+                timeReq: 90 * 60,      // 90s
+                scoreReq: 30000,
+                cooldown: 32 * 60,
+                width: 260, height: 130,
+                speed: 0.32,
+                color: '#7a6a55'
+            },
+            { // Imperial I-class Star Destroyer — 1,600m
+                key: 'stardestroyer',
+                timeReq: 150 * 60,     // 2.5min
+                scoreReq: 70000,
+                cooldown: 38 * 60,
+                width: 340, height: 110,
+                speed: 0.28,
+                color: '#9ea7b0'
+            },
+            { // Executor-class Super Star Destroyer — 19km, Vader's flagship
+                key: 'executor',
+                timeReq: 240 * 60,     // 4min
+                scoreReq: 150000,
+                cooldown: 50 * 60,
+                width: 560, height: 130,
+                speed: 0.22,
+                color: '#6c7681'
+            },
+            { // DS-1 Death Star — ultimate weapon, only at endgame mastery
+                key: 'deathstar',
+                timeReq: 360 * 60,     // 6min
+                scoreReq: 300000,
+                cooldown: 70 * 60,
+                width: 320, height: 320,
+                speed: 0.16,
+                color: '#a8aab0'
+            }
+        ];
+
+        const shipSpawnState = {}; // last spawn frame per ship key
+
+        function updateCapitalShipSpawn() {
+            if (gameState.screen !== STATE.PLAYING) return;
+            for (const def of SHIP_DEFS) {
+                if (gameState.playTime < def.timeReq && gameState.score < def.scoreReq) continue;
+                const last = shipSpawnState[def.key] || -99999;
+                if (gameState.playTime - last < def.cooldown) continue;
+                // Random emergence
+                if (Math.random() < 0.0012) {
+                    spawnCapitalShip(def);
+                    shipSpawnState[def.key] = gameState.playTime;
+                }
+            }
+        }
+
+        function spawnCapitalShip(def) {
+            // Avoid stacking too many
+            if (capitalShips.length >= 3) return;
+            const y = def.key === 'deathstar'
+                ? Math.random() * (canvas.height * 0.5) + 40
+                : Math.random() * (canvas.height - def.height - 40) + 20;
+            capitalShips.push({
+                key: def.key,
+                x: canvas.width + def.width + 20,
+                y: y,
+                width: def.width,
+                height: def.height,
+                speed: def.speed,
+                color: def.color,
+                bobPhase: Math.random() * Math.PI * 2,
+                alpha: 0.78
+            });
+        }
+
+        function drawCapitalShips() {
+            capitalShips.forEach(s => {
+                const yOff = Math.sin(s.bobPhase) * 2;
+                ctx.save();
+                ctx.globalAlpha = s.alpha;
+                if (s.key === 'falcon') drawFalcon(s.x, s.y + yOff, s);
+                else if (s.key === 'lucrehulk') drawLucrehulk(s.x, s.y + yOff, s);
+                else if (s.key === 'stardestroyer') drawStarDestroyer(s.x, s.y + yOff, s);
+                else if (s.key === 'executor') drawExecutor(s.x, s.y + yOff, s);
+                else if (s.key === 'deathstar') drawDeathStar(s.x, s.y + yOff, s);
+                ctx.restore();
+            });
+        }
+
+        function drawFalcon(x, y, s) {
+            const w = s.width, h = s.height;
+            const cx = x + w / 2, cy = y + h / 2;
+            // Main saucer disc
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, w * 0.46, h * 0.42, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Forward mandibles (Y-shaped front)
+            ctx.fillStyle = '#a8aeb3';
+            ctx.beginPath();
+            ctx.moveTo(cx - w * 0.46, cy - h * 0.05);
+            ctx.lineTo(cx - w * 0.72, cy - h * 0.22);
+            ctx.lineTo(cx - w * 0.72, cy - h * 0.12);
+            ctx.lineTo(cx - w * 0.46, cy);
+            ctx.closePath();
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(cx - w * 0.46, cy + h * 0.05);
+            ctx.lineTo(cx - w * 0.72, cy + h * 0.22);
+            ctx.lineTo(cx - w * 0.72, cy + h * 0.12);
+            ctx.lineTo(cx - w * 0.46, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Cockpit (offset right side)
+            ctx.fillStyle = '#3a4148';
+            ctx.beginPath();
+            ctx.ellipse(cx + w * 0.18, cy + h * 0.22, w * 0.08, h * 0.10, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Central dish
+            ctx.fillStyle = '#8a9098';
+            ctx.beginPath();
+            ctx.arc(cx + w * 0.08, cy - h * 0.18, h * 0.12, 0, Math.PI * 2);
+            ctx.fill();
+            // Engine glow trail
+            const g = ctx.createLinearGradient(cx + w * 0.46, cy, cx + w * 0.8, cy);
+            g.addColorStop(0, 'rgba(120, 200, 255, 0.7)');
+            g.addColorStop(1, 'rgba(120, 200, 255, 0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(cx + w * 0.42, cy - h * 0.18, w * 0.4, h * 0.36);
+        }
+
+        function drawStarDestroyer(x, y, s) {
+            const w = s.width, h = s.height;
+            // Wedge/triangle body
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.moveTo(x, y + h * 0.55);
+            ctx.lineTo(x + w * 0.92, y + h * 0.18);
+            ctx.lineTo(x + w * 0.92, y + h * 0.92);
+            ctx.closePath();
+            ctx.fill();
+            // Bottom shadow plate
+            ctx.fillStyle = '#5a6168';
+            ctx.beginPath();
+            ctx.moveTo(x + w * 0.1, y + h * 0.62);
+            ctx.lineTo(x + w * 0.92, y + h * 0.92);
+            ctx.lineTo(x + w * 0.92, y + h * 1.0);
+            ctx.lineTo(x + w * 0.15, y + h * 0.78);
+            ctx.closePath();
+            ctx.fill();
+            // Command tower
+            ctx.fillStyle = '#b3bac0';
+            ctx.fillRect(x + w * 0.7, y + h * 0.05, w * 0.13, h * 0.20);
+            ctx.fillStyle = '#7d848a';
+            ctx.fillRect(x + w * 0.7, y + h * 0.22, w * 0.13, h * 0.06);
+            // Twin shield domes
+            ctx.fillStyle = '#cdd2d7';
+            ctx.beginPath();
+            ctx.arc(x + w * 0.73, y + h * 0.04, h * 0.04, 0, Math.PI * 2);
+            ctx.arc(x + w * 0.80, y + h * 0.04, h * 0.04, 0, Math.PI * 2);
+            ctx.fill();
+            // Surface detail lines
+            ctx.strokeStyle = 'rgba(60,68,76,0.7)';
+            ctx.lineWidth = 1;
+            for (let i = 1; i < 4; i++) {
+                ctx.beginPath();
+                ctx.moveTo(x + w * 0.1, y + h * (0.55 + i * 0.08));
+                ctx.lineTo(x + w * 0.92, y + h * (0.18 + i * 0.18));
+                ctx.stroke();
+            }
+            // Engine glow at rear
+            ctx.fillStyle = 'rgba(140, 200, 255, 0.85)';
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.arc(x + w * 0.92, y + h * (0.42 + i * 0.14), h * 0.05, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawExecutor(x, y, s) {
+            const w = s.width, h = s.height;
+            // Massive elongated dagger
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.moveTo(x, y + h * 0.5);
+            ctx.lineTo(x + w * 0.96, y + h * 0.30);
+            ctx.lineTo(x + w * 0.96, y + h * 0.70);
+            ctx.closePath();
+            ctx.fill();
+            // Underside
+            ctx.fillStyle = '#4a525a';
+            ctx.beginPath();
+            ctx.moveTo(x + w * 0.05, y + h * 0.54);
+            ctx.lineTo(x + w * 0.96, y + h * 0.70);
+            ctx.lineTo(x + w * 0.96, y + h * 0.78);
+            ctx.lineTo(x + w * 0.1, y + h * 0.62);
+            ctx.closePath();
+            ctx.fill();
+            // Command tower (further back)
+            ctx.fillStyle = '#838b93';
+            ctx.fillRect(x + w * 0.84, y + h * 0.20, w * 0.07, h * 0.15);
+            ctx.fillStyle = '#aab2ba';
+            ctx.beginPath();
+            ctx.arc(x + w * 0.855, y + h * 0.20, h * 0.025, 0, Math.PI * 2);
+            ctx.arc(x + w * 0.88, y + h * 0.20, h * 0.025, 0, Math.PI * 2);
+            ctx.fill();
+            // Hull paneling
+            ctx.strokeStyle = 'rgba(40,46,52,0.7)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 6; i++) {
+                ctx.beginPath();
+                ctx.moveTo(x + w * 0.08, y + h * (0.5 + i * 0.04));
+                ctx.lineTo(x + w * 0.96, y + h * (0.30 + i * 0.07));
+                ctx.stroke();
+            }
+            // Many engine ports
+            ctx.fillStyle = 'rgba(150, 210, 255, 0.85)';
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.arc(x + w * 0.96, y + h * (0.36 + i * 0.075), h * 0.035, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawLucrehulk(x, y, s) {
+            const w = s.width, h = s.height;
+            const cx = x + w / 2, cy = y + h / 2;
+            // Outer torus
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, w * 0.48, h * 0.46, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Inner cutout (hole of donut)
+            ctx.fillStyle = '#1a1a24';
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, w * 0.16, h * 0.30, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Central command sphere
+            const grad = ctx.createRadialGradient(cx - 6, cy - 6, 2, cx, cy, h * 0.22);
+            grad.addColorStop(0, '#a89684');
+            grad.addColorStop(1, '#5c4d3b');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(cx, cy, h * 0.20, 0, Math.PI * 2);
+            ctx.fill();
+            // Surface paneling lines (radial)
+            ctx.strokeStyle = 'rgba(40,30,20,0.6)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 12; i++) {
+                const a = (i / 12) * Math.PI * 2;
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(a) * w * 0.20, cy + Math.sin(a) * h * 0.34);
+                ctx.lineTo(cx + Math.cos(a) * w * 0.46, cy + Math.sin(a) * h * 0.44);
+                ctx.stroke();
+            }
+            // Equator highlight
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, w * 0.48, h * 0.04, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        function drawDeathStar(x, y, s) {
+            const w = s.width, h = s.height;
+            const cx = x + w / 2, cy = y + h / 2;
+            const r = Math.min(w, h) * 0.48;
+            // Body sphere with shading gradient
+            const grad = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
+            grad.addColorStop(0, '#c0c3c8');
+            grad.addColorStop(0.6, '#7c8086');
+            grad.addColorStop(1, '#3a3d42');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fill();
+            // Equatorial trench
+            ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+            ctx.lineWidth = Math.max(2, r * 0.03);
+            ctx.beginPath();
+            ctx.moveTo(cx - r * 0.96, cy + r * 0.04);
+            ctx.lineTo(cx + r * 0.96, cy + r * 0.04);
+            ctx.stroke();
+            // Superlaser dish (upper-left quadrant) - concave depression
+            const dishX = cx - r * 0.42;
+            const dishY = cy - r * 0.42;
+            const dishR = r * 0.18;
+            const dishGrad = ctx.createRadialGradient(dishX, dishY, 1, dishX, dishY, dishR);
+            dishGrad.addColorStop(0, '#2a2d32');
+            dishGrad.addColorStop(1, '#62666c');
+            ctx.fillStyle = dishGrad;
+            ctx.beginPath();
+            ctx.arc(dishX, dishY, dishR, 0, Math.PI * 2);
+            ctx.fill();
+            // Dish focus point
+            ctx.fillStyle = '#1a1d22';
+            ctx.beginPath();
+            ctx.arc(dishX, dishY, dishR * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+            // Surface panel hints
+            ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+            ctx.lineWidth = 1;
+            for (let i = 1; i < 6; i++) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, r * (i / 6), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            for (let i = 0; i < 8; i++) {
+                const a = (i / 8) * Math.PI * 2;
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(a) * r * 0.2, cy + Math.sin(a) * r * 0.2);
+                ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+                ctx.stroke();
+            }
         }
 
         // ===== HUD =====
@@ -2132,6 +2483,9 @@
                 ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
                 ctx.fill();
             });
+
+            // Capital ships (Star Wars background fleet, behind gameplay)
+            drawCapitalShips();
 
             // Shockwaves
             shockwaves.forEach(s => drawShockwave(s));
