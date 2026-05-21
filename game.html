@@ -2044,6 +2044,7 @@
             gameState.kills = 0;
             gameState.playTime = 0;
             capitalShips.length = 0;
+            for (const k in shipSpawnState) delete shipSpawnState[k];
             player.health = player.maxHealth;
             player.x = 100;
             player.y = canvas.height / 2;
@@ -2103,63 +2104,74 @@
         const SHIP_DEFS = [
             { // YT-1300 Millennium Falcon — 34.75m freighter, fastest hunk of junk
                 key: 'falcon',
-                timeReq: 30 * 60,      // 30s
-                scoreReq: 5000,
-                cooldown: 18 * 60,     // re-spawn every 18s when eligible
+                timeReq: 8 * 60,       // 8s — appears almost immediately
+                scoreReq: 500,
+                cooldown: 14 * 60,
+                spawnChance: 0.004,
                 width: 80, height: 38,
                 speed: 0.85,
                 color: '#c4c8cc'
             },
             { // Lucrehulk-class Droid Control Ship — 3,170m CIS flagship
                 key: 'lucrehulk',
-                timeReq: 90 * 60,      // 90s
-                scoreReq: 30000,
-                cooldown: 32 * 60,
+                timeReq: 35 * 60,      // 35s
+                scoreReq: 8000,
+                cooldown: 25 * 60,
+                spawnChance: 0.003,
                 width: 260, height: 130,
                 speed: 0.32,
                 color: '#7a6a55'
             },
             { // Imperial I-class Star Destroyer — 1,600m
                 key: 'stardestroyer',
-                timeReq: 150 * 60,     // 2.5min
-                scoreReq: 70000,
-                cooldown: 38 * 60,
+                timeReq: 70 * 60,      // 70s
+                scoreReq: 20000,
+                cooldown: 30 * 60,
+                spawnChance: 0.0025,
                 width: 340, height: 110,
                 speed: 0.28,
                 color: '#9ea7b0'
             },
             { // Executor-class Super Star Destroyer — 19km, Vader's flagship
                 key: 'executor',
-                timeReq: 240 * 60,     // 4min
-                scoreReq: 150000,
-                cooldown: 50 * 60,
+                timeReq: 130 * 60,     // ~2min
+                scoreReq: 55000,
+                cooldown: 40 * 60,
+                spawnChance: 0.002,
                 width: 560, height: 130,
                 speed: 0.22,
                 color: '#6c7681'
             },
             { // DS-1 Death Star — ultimate weapon, only at endgame mastery
                 key: 'deathstar',
-                timeReq: 360 * 60,     // 6min
-                scoreReq: 300000,
-                cooldown: 70 * 60,
+                timeReq: 210 * 60,     // 3.5min
+                scoreReq: 120000,
+                cooldown: 55 * 60,
+                spawnChance: 0.0015,
                 width: 320, height: 320,
                 speed: 0.16,
                 color: '#a8aab0'
             }
         ];
 
-        const shipSpawnState = {}; // last spawn frame per ship key
+        const shipSpawnState = {}; // { lastFrame, seen } per ship key
 
         function updateCapitalShipSpawn() {
             if (gameState.screen !== STATE.PLAYING) return;
             for (const def of SHIP_DEFS) {
                 if (gameState.playTime < def.timeReq && gameState.score < def.scoreReq) continue;
-                const last = shipSpawnState[def.key] || -99999;
-                if (gameState.playTime - last < def.cooldown) continue;
-                // Random emergence
-                if (Math.random() < 0.0012) {
+                const st = shipSpawnState[def.key] || (shipSpawnState[def.key] = { lastFrame: -99999, seen: false });
+                // First-time guarantee: as soon as the threshold is met, spawn once unconditionally.
+                if (!st.seen) {
                     spawnCapitalShip(def);
-                    shipSpawnState[def.key] = gameState.playTime;
+                    st.seen = true;
+                    st.lastFrame = gameState.playTime;
+                    continue;
+                }
+                if (gameState.playTime - st.lastFrame < def.cooldown) continue;
+                if (Math.random() < (def.spawnChance || 0.002)) {
+                    spawnCapitalShip(def);
+                    st.lastFrame = gameState.playTime;
                 }
             }
         }
